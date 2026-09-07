@@ -1,0 +1,129 @@
+(async function() {
+  console.log("🚀 正在啟動 Genspark PPT 提取器...");
+  // 1. 抓取所有的投影片容器（包含主文檔與所有 iframe 內的 slide-container）
+  function getAllSlides() {
+    const slides = [];
+    document.querySelectorAll('.slide-container').forEach(el => slides.push(el));
+    document.querySelectorAll('iframe').forEach(iframe => {
+      try {
+        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+        if (doc) {
+          doc.querySelectorAll('.slide-container').forEach(el => {
+            if (!slides.includes(el)) slides.push(el);
+          });
+        }
+      } catch (e) {}
+    });
+    return slides;
+  }
+  // 2. 抓取所有外部樣式與 Google Fonts 字型
+  function getAllStyles() {
+    const styles = new Set();
+    function extract(doc) {
+      if (!doc) return;
+      doc.querySelectorAll('link[rel="stylesheet"]').forEach(l => {
+        styles.add(<link rel="stylesheet" href="${l.href}">);
+      });
+      doc.querySelectorAll('style').forEach(s => {
+        styles.add(<style>${s.innerHTML}</style>);
+      });
+    }
+    extract(document);
+    document.querySelectorAll('iframe').forEach(iframe => {
+      try {
+        extract(iframe.contentDocument || iframe.contentWindow?.document);
+      } catch (e) {}
+    });
+    return Array.from(styles).join('\n');
+  }
+  const slides = getAllSlides();
+  const stylesHtml = getAllStyles();
+  if (slides.length === 0) {
+    alert("❌ 未找到任何投影片內容！請確認是否已點擊右上角的「View & Export」進入預覽頁。");
+    return;
+  }
+  // 3. 在畫面右上角注入控制面板
+  document.getElementById('genspark-exporter-bar')?.remove();
+  const panel = document.createElement('div');
+  panel.id = 'genspark-exporter-bar';
+  panel.style.cssText = `
+    position: fixed; top: 20px; right: 20px; z-index: 9999999;
+    background: #ffffff; padding: 18px 22px; border-radius: 12px;
+    box-shadow: 0 10px 35px rgba(0,0,0,0.3); font-family: sans-serif;
+    color: #1f2937; display: flex; flex-direction: column; gap: 10px;
+    min-width: 260px; border: 1px solid #e5e7eb;
+  `;
+  panel.innerHTML = `
+<div style="font-weight:bold; font-size:16px; border-bottom:1px solid #eee; padding-bottom:6px;">
+      ✨ Genspark PPT 導出面板
+</div>
+<div style="font-size:13px; color:#4b5563;">
+      已成功檢測到 <b>${slides.length}</b> 頁投影片
+      ${slides.length === 1 ? '<br><span style="color:#ef4444;">⚠️ 僅抓到 1 頁，請確認是否已點開「View & Export」</span>' : ''}
+</div>
+<button id="btn-export-pptx" style="background:#2563eb; color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600;">📥 下載 PPTX (可編輯)</button>
+<button id="btn-export-pdf" style="background:#059669; color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:14px; font-weight:600;">📄 另存為高清 PDF (最推薦)</button>
+<button id="btn-export-html" style="background:#4b5563; color:#fff; border:none; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:14px;">💾 下載單檔 HTML</button>
+<button id="btn-close-bar" style="background:transparent; color:#9ca3af; border:none; font-size:12px; cursor:pointer;">關閉面板</button>
+  `;
+  document.body.appendChild(panel);
+  // 功能 1：導出 PPTX
+  document.getElementById('btn-export-pptx').onclick = async function() {
+    this.innerText = '⏳ 正在轉化為 PPTX...';
+    try {
+      if (!window.domToPptx) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = 'https://cdn.jsdelivr.net/npm/dom-to-pptx@latest/dist/dom-to-pptx.bundle.js';
+          s.onload = resolve;
+          s.onerror = () => reject(new Error('瀏覽器安全限制 (CSP) 阻止加載 PPTX 轉換庫'));
+          document.head.appendChild(s);
+        });
+      }
+      await window.domToPptx.exportToPptx(slides, { fileName: 'Genspark_Presentation.pptx' });
+      this.innerText = '✅ 下載成功！';
+    } catch (e) {
+      alert(e.message + '\n\n請改用【另存為高清 PDF】方案，同樣能獲得 100% 向量滿版簡報！');
+      this.innerText = '📥 下載 PPTX (可編輯)';
+    }
+  };
+  // 功能 2：另存為 PDF（1920x1080 滿版排版，最穩定）
+  document.getElementById('btn-export-pdf').onclick = function() {
+    const printWin = window.open('', '_blank');
+    if (!printWin) return alert('彈出視窗被瀏覽器阻擋，請在瀏覽器網址列右側允許彈出視窗！');
+    const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Genspark_Presentation</title>
+  ${stylesHtml}
+<style>
+    @page { size: 1920px 1080px; margin: 0; }
+    @media print {
+      body { margin: 0 !important; padding: 0 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      .slide-page { page-break-after: always; break-after: page; page-break-inside: avoid; break-inside: avoid; margin: 0 !important; }
+    }
+    body { background: #333; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+    .slide-page { width: 1920px; height: 1080px; position: relative; overflow: hidden; background: #fff; }
+</style>
+</head>
+<body>
+  ${slides.map(s => <div class="slide-page">${s.outerHTML}</div>).join('\n')}
+</body>
+</html>`;
+    printWin.document.open();
+    printWin.document.write(html);
+    printWin.document.close();
+    setTimeout(() => { printWin.print(); }, 1000);
+  };
+  // 功能 3：下載離線 HTML
+  document.getElementById('btn-export-html').onclick = function() {
+    const fullHtml = <!doctype html><html><head><meta charset="utf-8">${stylesHtml}<style>body{margin:0;background:#000;display:flex;flex-direction:column;align-items:center;gap:30px;padding:20px;}.slide-box{width:1920px;height:1080px;position:relative;overflow:hidden;}</style></head><body>${slides.map(s => `<div class="slide-box">${s.outerHTML}</div>).join('')}</body></html>`;
+    const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Genspark_Presentation.html';
+    a.click();
+  };
+  document.getElementById('btn-close-bar').onclick = () => panel.remove();
+})();
